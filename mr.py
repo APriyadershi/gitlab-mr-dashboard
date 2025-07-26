@@ -7,6 +7,9 @@ import requests
 import json
 from typing import List, Dict, Optional
 import os
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Configuration
 st.set_page_config(
@@ -23,6 +26,24 @@ REPO_OWNER = st.secrets.get("REPO_OWNER", "")
 REPO_NAME = st.secrets.get("REPO_NAME", "")
 PLATFORM = st.secrets.get("PLATFORM", "gitlab")  # "github" or "gitlab"
 GITLAB_URL = st.secrets.get("GITLAB_URL", "https://gitlab.com")  # Custom GitLab instance URL
+
+def create_robust_session():
+    """Create a requests session with retry logic and timeout settings"""
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    
+    # Add retry adapter
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    return session
 
 class MRDataFetcher:
     """Fetch MR/PR data from GitLab or GitHub"""
@@ -66,9 +87,26 @@ class MRDataFetcher:
             "per_page": 100
         }
         
-        response = requests.get(url, headers=self.headers, params=params)
+        try:
+            session = create_robust_session()
+            response = session.get(
+                url, 
+                headers=self.headers, 
+                params=params,
+                timeout=30
+            )
+        except requests.exceptions.ConnectionError as e:
+            st.error(f"Connection error to GitHub: {e}")
+            return []
+        except requests.exceptions.Timeout as e:
+            st.error(f"Timeout error: {e}")
+            return []
+        except Exception as e:
+            st.error(f"Unexpected error: {e}")
+            return []
+        
         if response.status_code != 200:
-            st.error(f"GitHub API error: {response.status_code}")
+            st.error(f"GitHub API error: {response.status_code} - {response.text}")
             return []
         
         issues = response.json()
@@ -103,9 +141,27 @@ class MRDataFetcher:
             "per_page": 100
         }
         
-        response = requests.get(url, headers=self.headers, params=params)
+        try:
+            session = create_robust_session()
+            response = session.get(
+                url, 
+                headers=self.headers, 
+                params=params,
+                timeout=30  # 30 second timeout
+            )
+        except requests.exceptions.ConnectionError as e:
+            st.error(f"Connection error to GitLab: {e}")
+            st.info("This might be due to network restrictions or VPN requirements.")
+            return []
+        except requests.exceptions.Timeout as e:
+            st.error(f"Timeout error: {e}")
+            return []
+        except Exception as e:
+            st.error(f"Unexpected error: {e}")
+            return []
+        
         if response.status_code != 200:
-            st.error(f"GitLab API error: {response.status_code}")
+            st.error(f"GitLab API error: {response.status_code} - {response.text}")
             return []
         
         mrs_data = response.json()
@@ -126,6 +182,23 @@ class MRDataFetcher:
             mrs.append(mr_data)
         
         return mrs
+
+def test_gitlab_connection(gitlab_url: str, token: str) -> bool:
+    """Test if we can connect to GitLab instance"""
+    try:
+        session = create_robust_session()
+        test_url = f"{gitlab_url}/api/v4/version"
+        headers = {"PRIVATE-TOKEN": token}
+        
+        response = session.get(test_url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return True
+        else:
+            st.error(f"GitLab connection test failed: {response.status_code}")
+            return False
+    except Exception as e:
+        st.error(f"GitLab connection test failed: {e}")
+        return False
 
 def create_charts(df: pd.DataFrame):
     """Create various charts from MR data"""
@@ -275,12 +348,49 @@ def main():
     token = GITHUB_TOKEN if platform == "github" else GITLAB_TOKEN
     fetcher = MRDataFetcher(platform, token, REPO_OWNER, REPO_NAME)
     
+    # Test GitLab connection if using GitLab
+    if platform == "gitlab":
+        st.sidebar.subheader("🔗 GitLab Connection Test")
+        if st.sidebar.button("Test GitLab Connection"):
+            if test_gitlab_connection(GITLAB_URL, GITLAB_TOKEN):
+                st.success("Successfully connected to GitLab instance!")
+            else:
+                st.error("Could not connect to GitLab instance. Please check your token and URL.")
+    
     # Fetch data
     with st.spinner(f"Fetching migration guide MRs from the last {days_back} days..."):
         mrs_data = fetcher.fetch_migration_guide_mrs(days_back)
     
     if not mrs_data:
         st.warning("No migration guide MRs found or unable to fetch data.")
+        st.info("Showing sample data for demonstration purposes.")
+        
+        # Show sample data for demonstration
+        sample_data = [
+            {
+                "id": "SAMPLE-001",
+                "title": "Sample Migration Guide MR",
+                "state": "open",
+                "created_at": "2024-01-15T10:00:00Z",
+                "updated_at": "2024-01-15T10:00:00Z",
+                "closed_at": None,
+                "labels": ["migration-guide", "documentation"],
+                "author": "sample-user",
+                "url": "#"
+            },
+            {
+                "id": "SAMPLE-002", 
+                "title": "Another Sample MR",
+                "state": "closed",
+                "created_at": "2024-01-10T10:00:00Z",
+                "updated_at": "2024-01-12T10:00:00Z",
+                "closed_at": "2024-01-12T10:00:00Z",
+                "labels": ["migration-guide", "bug-fix"],
+                "author": "another-user",
+                "url": "#"
+            }
+        ]
+        mrs_data = sample_data
         return
     
     # Convert to DataFrame
