@@ -22,6 +22,7 @@ GITLAB_TOKEN = st.secrets.get("GITLAB_TOKEN", "")
 REPO_OWNER = st.secrets.get("REPO_OWNER", "")
 REPO_NAME = st.secrets.get("REPO_NAME", "")
 PLATFORM = st.secrets.get("PLATFORM", "gitlab")  # "github" or "gitlab"
+GITLAB_URL = st.secrets.get("GITLAB_URL", "https://gitlab.com")  # Custom GitLab instance URL
 
 class MRDataFetcher:
     """Fetch MR/PR data from GitLab or GitHub"""
@@ -39,7 +40,10 @@ class MRDataFetcher:
                 "Accept": "application/vnd.github.v3+json"
             }
         else:  # gitlab
-            self.base_url = f"https://gitlab.com/api/v4/projects/{owner}%2F{repo}"
+            # Encode the project path properly for custom GitLab instances
+            project_path = f"{owner}/{repo}"
+            encoded_path = project_path.replace("/", "%2F")
+            self.base_url = f"{GITLAB_URL}/api/v4/projects/{encoded_path}"
             self.headers = {"PRIVATE-TOKEN": token}
     
     def fetch_migration_guide_mrs(self, days_back: int = 30) -> List[Dict]:
@@ -248,6 +252,7 @@ def main():
         - `REPO_OWNER`: Project ID or owner/group
         - `REPO_NAME`: Repository name
         - `PLATFORM`: "gitlab"
+        - `GITLAB_URL`: Your GitLab instance URL (default: "https://gitlab.com")
         
         **For GitHub:**
         - `GITHUB_TOKEN`: Your GitHub personal access token
@@ -261,6 +266,7 @@ def main():
         REPO_OWNER = "your-group"
         REPO_NAME = "your-project"
         PLATFORM = "gitlab"
+        GITLAB_URL = "https://gitlab-master.nvidia.com"
         ```
         """)
         return
